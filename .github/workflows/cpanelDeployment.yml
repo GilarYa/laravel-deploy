@@ -33,15 +33,30 @@ jobs:
         port: 21
         server-dir: /public_html/
         log-level: verbose
-        timeout: 60000
+        timeout: 300000
+        dry-run: false
+        dangerous-clean-slate: false
         exclude: |
           **/.git*
           **/.git*/**
           **/node_modules/**
+          **/vendor/**
           .env
           .env.example
           README.md
           tests/
           phpunit.xml
           storage/logs/**
+          storage/framework/cache/**
+          storage/framework/sessions/**
+          storage/framework/views/**
           bootstrap/cache/**
+          public/storage
+          .github/
+          .gitignore
+          .editorconfig
+          .styleci.yml
+          vite.config.js
+          package*.json
+          composer.lock
+          artisan
