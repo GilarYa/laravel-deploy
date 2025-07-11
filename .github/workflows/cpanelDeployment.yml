@@ -32,6 +32,8 @@ jobs:
         protocol: ftp
         port: 21
         server-dir: /public_html/
+        log-level: verbose
+        timeout: 60000
         exclude: |
           **/.git*
           **/.git*/**
@@ -39,3 +41,7 @@ jobs:
           .env
           .env.example
           README.md
+          tests/
+          phpunit.xml
+          storage/logs/**
+          bootstrap/cache/**
