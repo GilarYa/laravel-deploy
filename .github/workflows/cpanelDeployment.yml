@@ -11,8 +11,15 @@ jobs:
     - uses: actions/checkout@v2.1.0
       with:
         fetch-depth: 2 
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
     - name: Build assets
-      run: npm install && npm run build
+      run: |
+        npm install
+        npm run build
 
     - name: Install PHP and Composer
       uses: shivammathur/setup-php@v2
@@ -23,40 +30,54 @@ jobs:
     - name: Install PHP dependencies
       run: composer install --no-dev --optimize-autoloader
         
-    - name: FTP-Deploy-Action
-      uses: SamKirkland/FTP-Deploy-Action@4.3.3
+    - name: Prepare deployment files
+      run: |
+        # Remove files that shouldn't be deployed
+        rm -rf .git/
+        rm -rf node_modules/
+        rm -rf tests/
+        rm -f .env.example
+        rm -f phpunit.xml
+        rm -f README.md
+        rm -f .gitignore
+        rm -f .editorconfig
+        rm -f vite.config.js
+        rm -f package*.json
+        rm -f composer.lock
+
+        # Clear Laravel caches
+        rm -rf storage/logs/*
+        rm -rf storage/framework/cache/data/*
+        rm -rf storage/framework/sessions/*
+        rm -rf storage/framework/views/*
+        rm -rf bootstrap/cache/*.php
+
+        # Create necessary directories with proper permissions
+        mkdir -p storage/logs
+        mkdir -p storage/framework/cache/data
+        mkdir -p storage/framework/sessions
+        mkdir -p storage/framework/views
+        mkdir -p bootstrap/cache
+
+    - name: FTP Deploy with retry
+      uses: nick-fields/retry@v2
       with:
-        server: ${{ secrets.SERVER }}
-        username: ${{ secrets.USERNAME }}
-        password: ${{ secrets.PASSWORD }}
-        protocol: ftp
-        port: 21
-        server-dir: /public_html/
-        log-level: verbose
-        timeout: 300000
-        dry-run: false
-        dangerous-clean-slate: false
-        exclude: |
-          **/.git*
-          **/.git*/**
-          **/node_modules/**
-          **/vendor/**
-          .env
-          .env.example
-          README.md
-          tests/
-          phpunit.xml
-          storage/logs/**
-          storage/framework/cache/**
-          storage/framework/sessions/**
-          storage/framework/views/**
-          bootstrap/cache/**
-          public/storage
-          .github/
-          .gitignore
-          .editorconfig
-          .styleci.yml
-          vite.config.js
-          package*.json
-          composer.lock
-          artisan
+        timeout_minutes: 10
+        max_attempts: 3
+        retry_wait_seconds: 30
+        command: |
+          # Install lftp if not available
+          sudo apt-get update && sudo apt-get install -y lftp
+
+          # Deploy with lftp
+          lftp -e "
+          set ftp:ssl-allow no;
+          set ftp:passive-mode on;
+          set net:timeout 60;
+          set net:max-retries 3;
+          open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }};
+          cd /public_html/;
+          lcd ./;
+          mirror --reverse --delete --verbose --parallel=1 --exclude-glob='.git*' --exclude-glob='node_modules*' --exclude-glob='tests*' ./ ./;
+          quit
+          "
