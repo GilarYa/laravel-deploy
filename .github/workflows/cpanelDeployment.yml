@@ -106,12 +106,37 @@ jobs:
           echo "📋 This will only upload files that are newer or different from server"
           echo "⚡ Excluding vendor/ folder for faster deployment (already exists on server)"
 
-          # Remove vendor folder locally to prevent upload
-          echo "Temporarily removing vendor/ folder to exclude from sync..."
-          if [ -d "vendor" ]; then
-            mv vendor vendor_backup
-            echo "✅ vendor/ folder backed up"
-          fi
+          # Create exclude file for lftp
+          cat > .lftp_exclude << 'EOF'
+          vendor/
+          vendor/*
+          vendor/**
+          node_modules/
+          node_modules/*
+          .git/
+          .git/*
+          tests/
+          tests/*
+          .github/
+          .github/*
+          *.md
+          package*.json
+          composer.lock
+          .env*
+          phpunit.xml
+          README*
+          storage/logs/
+          storage/logs/*
+          storage/framework/cache/
+          storage/framework/cache/*
+          storage/framework/sessions/
+          storage/framework/sessions/*
+          storage/framework/views/
+          storage/framework/views/*
+          bootstrap/cache/
+          bootstrap/cache/*
+          public/storage
+          EOF
 
           # Use lftp mirror with intelligent comparison
           lftp -e "
@@ -124,37 +149,17 @@ jobs:
           cd /public_html/;
           lcd ./;
 
-          echo 'Starting intelligent sync (vendor excluded)...';
+          echo 'Starting intelligent sync (with excludes)...';
 
-          # Mirror with smart comparison - upload newer/different, delete removed
-          mirror --reverse --only-newer --delete --verbose --parallel=2 \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='tests' \
-            --exclude='*.md' \
-            --exclude='package*.json' \
-            --exclude='composer.lock' \
-            --exclude='.env*' \
-            --exclude='phpunit.xml' \
-            --exclude='README*' \
-            --exclude='.github' \
-            --exclude='storage/logs' \
-            --exclude='storage/framework/cache' \
-            --exclude='storage/framework/sessions' \
-            --exclude='storage/framework/views' \
-            --exclude='bootstrap/cache' \
-            --exclude='public/storage' \
-            ./ ./;
+          # Mirror with smart comparison and exclude file
+          mirror --reverse --only-newer --verbose --parallel=2 --exclude-glob-from=.lftp_exclude ./ ./;
 
           echo 'Sync completed!';
           quit
           "
 
-          # Restore vendor folder
-          if [ -d "vendor_backup" ]; then
-            mv vendor_backup vendor
-            echo "✅ vendor/ folder restored"
-          fi
+          # Cleanup exclude file
+          rm -f .lftp_exclude
 
           echo "✅ Smart server sync completed!"
 
