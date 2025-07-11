@@ -18,6 +18,9 @@ class Product extends Model
         'name',
         'description',
         'price',
+        'image',
+        'stock',
+        'is_active',
     ];
 
     /**
@@ -27,5 +30,18 @@ class Product extends Model
      */
     protected $casts = [
         'price' => 'decimal:2',
+        'is_active' => 'boolean',
     ];
+
+    // Scope untuk produk aktif
+    public function scopeActive($query)
+    {
+        return $query->where('is_active', true);
+    }
+
+    // Scope untuk produk tersedia (stock > 0)
+    public function scopeAvailable($query)
+    {
+        return $query->where('stock', '>', 0);
+    }
 }

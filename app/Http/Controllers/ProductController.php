@@ -15,7 +15,7 @@ class ProductController extends Controller
      */
     public function index(): View|JsonResponse
     {
-        $products = Product::latest()->paginate(10);
+        $products = Product::active()->available()->latest()->paginate(12);
 
         if (request()->wantsJson()) {
             return response()->json([
