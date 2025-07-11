@@ -106,6 +106,13 @@ jobs:
           echo "📋 This will only upload files that are newer or different from server"
           echo "⚡ Excluding vendor/ folder for faster deployment (already exists on server)"
 
+          # Remove vendor folder locally to prevent upload
+          echo "Temporarily removing vendor/ folder to exclude from sync..."
+          if [ -d "vendor" ]; then
+            mv vendor vendor_backup
+            echo "✅ vendor/ folder backed up"
+          fi
+
           # Use lftp mirror with intelligent comparison
           lftp -e "
           set ftp:ssl-allow no;
@@ -117,32 +124,37 @@ jobs:
           cd /public_html/;
           lcd ./;
 
-          echo 'Starting intelligent sync...';
+          echo 'Starting intelligent sync (vendor excluded)...';
 
           # Mirror with smart comparison - upload newer/different, delete removed
           mirror --reverse --only-newer --delete --verbose --parallel=2 \
-            --exclude-glob='.git*' \
-            --exclude-glob='node_modules*' \
-            --exclude-glob='vendor*' \
-            --exclude-glob='tests*' \
-            --exclude-glob='*.md' \
-            --exclude-glob='package*.json' \
-            --exclude-glob='composer.lock' \
-            --exclude-glob='.env*' \
-            --exclude-glob='phpunit.xml' \
-            --exclude-glob='README*' \
-            --exclude-glob='.github*' \
-            --exclude-glob='storage/logs/*' \
-            --exclude-glob='storage/framework/cache/*' \
-            --exclude-glob='storage/framework/sessions/*' \
-            --exclude-glob='storage/framework/views/*' \
-            --exclude-glob='bootstrap/cache/*' \
-            --exclude-glob='public/storage' \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='tests' \
+            --exclude='*.md' \
+            --exclude='package*.json' \
+            --exclude='composer.lock' \
+            --exclude='.env*' \
+            --exclude='phpunit.xml' \
+            --exclude='README*' \
+            --exclude='.github' \
+            --exclude='storage/logs' \
+            --exclude='storage/framework/cache' \
+            --exclude='storage/framework/sessions' \
+            --exclude='storage/framework/views' \
+            --exclude='bootstrap/cache' \
+            --exclude='public/storage' \
             ./ ./;
 
           echo 'Sync completed!';
           quit
           "
+
+          # Restore vendor folder
+          if [ -d "vendor_backup" ]; then
+            mv vendor_backup vendor
+            echo "✅ vendor/ folder restored"
+          fi
 
           echo "✅ Smart server sync completed!"
 
