@@ -102,15 +102,15 @@ jobs:
           # Install lftp
           sudo apt-get update && sudo apt-get install -y lftp
 
-          echo "🔍 Smart Server Sync - Checking server state vs local files..."
-          echo "📋 This will only upload files that are newer or different from server"
-          echo "⚡ Excluding vendor/ folder for faster deployment (already exists on server)"
+          echo "🔍 Smart Server Sync - Full sync with intelligent exclusions..."
+          echo "📋 Will upload newer/different files and delete removed files"
+          echo "⚡ Excluding: vendor/, node_modules/, tests/, .git/ for faster deployment"
+          echo "✅ Including: app/, public/, resources/, routes/, config/, bootstrap/ (all important files)"
 
-          # Create exclude file for lftp
+          # Create exclude file for lftp - ONLY exclude what's truly unnecessary
           cat > .lftp_exclude << 'EOF'
           vendor/
           vendor/*
-          vendor/**
           node_modules/
           node_modules/*
           .git/
@@ -122,20 +122,13 @@ jobs:
           *.md
           package*.json
           composer.lock
-          .env*
+          .env.example
           phpunit.xml
           README*
-          storage/logs/
           storage/logs/*
-          storage/framework/cache/
-          storage/framework/cache/*
-          storage/framework/sessions/
+          storage/framework/cache/data/*
           storage/framework/sessions/*
-          storage/framework/views/
           storage/framework/views/*
-          bootstrap/cache/
-          bootstrap/cache/*
-          public/storage
           EOF
 
           # Use lftp mirror with intelligent comparison
@@ -149,10 +142,11 @@ jobs:
           cd /public_html/;
           lcd ./;
 
-          echo 'Starting intelligent sync (with excludes)...';
+          echo 'Starting full sync with smart exclusions...';
+          echo 'Excluding vendor/, node_modules/, tests/ but including all Laravel core files...';
 
-          # Mirror with smart comparison and exclude file
-          mirror --reverse --only-newer --verbose --parallel=2 --exclude-glob-from=.lftp_exclude ./ ./;
+          # Mirror with smart comparison and exclude file - FULL SYNC with deletions
+          mirror --reverse --only-newer --delete --verbose --parallel=2 --exclude-glob-from=.lftp_exclude ./ ./;
 
           echo 'Sync completed!';
           quit
