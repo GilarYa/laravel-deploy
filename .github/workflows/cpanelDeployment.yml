@@ -81,52 +81,106 @@ jobs:
         echo "deployment_type=$DEPLOY_TYPE" >> $GITHUB_OUTPUT
         echo "🚀 Deployment mode: $DEPLOY_TYPE"
 
-    - name: Smart Incremental Deploy with Server Sync
-      id: incremental_deploy
+    - name: Detect Changed Files
+      id: changes
       if: steps.deploy_mode.outputs.deployment_type == 'incremental'
+      run: |
+        echo "🔍 Detecting changed files from Git..."
+
+        # Get changed files (modified/added)
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(php|blade\.php|js|css|json|html|txt)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock|\.md$|README)' || true)
+
+        # Get deleted files
+        DELETED_FILES=$(git diff --name-status HEAD~1 HEAD | grep '^D' | cut -f2 | grep -E '\.(php|blade\.php|js|css|json|html|txt)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock|\.md$|README)' || true)
+
+        echo "📝 Files to upload/update:"
+        echo "$CHANGED_FILES"
+        echo ""
+        echo "🗑️ Files to delete:"
+        echo "$DELETED_FILES"
+
+        # Save to outputs
+        echo "changed_files<<EOF" >> $GITHUB_OUTPUT
+        echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        echo "deleted_files<<EOF" >> $GITHUB_OUTPUT
+        echo "$DELETED_FILES" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+        # Check if there are any changes
+        if [ -z "$CHANGED_FILES" ] && [ -z "$DELETED_FILES" ]; then
+          echo "has_changes=false" >> $GITHUB_OUTPUT
+        else
+          echo "has_changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Selective FTP Deploy
+      id: selective_deploy
+      if: steps.deploy_mode.outputs.deployment_type == 'incremental' && steps.changes.outputs.has_changes == 'true'
       uses: nick-fields/retry@v2
       with:
-        timeout_minutes: 10
+        timeout_minutes: 8
         max_attempts: 3
-        retry_wait_seconds: 20
+        retry_wait_seconds: 15
         command: |
           # Install lftp
           sudo apt-get update && sudo apt-get install -y lftp
 
-          echo "🔍 Performing smart sync - checking server state first..."
+          echo "🎯 Selective deployment - only processing changed files..."
 
-          # Use lftp mirror with --only-newer flag for intelligent sync
-          lftp -e "
-          set ftp:ssl-allow no;
-          set ftp:passive-mode on;
-          set net:timeout 60;
-          set net:max-retries 3;
-          open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }};
-          cd /public_html/;
-          lcd ./;
+          # Create FTP script
+          cat > ftp_script.txt << 'EOF'
+          set ftp:ssl-allow no
+          set ftp:passive-mode on
+          set net:timeout 60
+          set net:max-retries 3
+          EOF
 
-          # Smart mirror: sync with server (including deletions)
-          echo \"🔄 SYNC MODE: Server will match Git repository exactly\"
-          echo \"⚠️ Files removed from Git will be deleted from server\"
+          echo "open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }}" >> ftp_script.txt
+          echo "cd /public_html/" >> ftp_script.txt
+          echo "lcd ./" >> ftp_script.txt
 
-          mirror --reverse --only-newer --delete --verbose --parallel=2 \
-            --exclude-glob='.git*' \
-            --exclude-glob='node_modules*' \
-            --exclude-glob='tests*' \
-            --exclude-glob='*.md' \
-            --exclude-glob='package*.json' \
-            --exclude-glob='composer.lock' \
-            --exclude-glob='.env*' \
-            --exclude-glob='phpunit.xml' \
-            --exclude-glob='README*' \
-            --exclude-glob='.github*' \
-            ./ ./;
-          quit
-          "
+          # Upload changed files
+          if [ -n "${{ steps.changes.outputs.changed_files }}" ]; then
+            echo "📤 Uploading changed/new files..."
+            echo "${{ steps.changes.outputs.changed_files }}" | while read -r file; do
+              if [ -n "$file" ] && [ -f "$file" ]; then
+                # Create directory if needed
+                dir=$(dirname "$file")
+                if [ "$dir" != "." ]; then
+                  echo "mkdir -p \"$dir\"" >> ftp_script.txt
+                fi
+                echo "put \"$file\" \"$file\"" >> ftp_script.txt
+                echo "  ✅ Queued: $file"
+              fi
+            done
+          fi
 
-          echo "✅ Smart incremental deployment completed!"
+          # Delete removed files
+          if [ -n "${{ steps.changes.outputs.deleted_files }}" ]; then
+            echo "🗑️ Deleting removed files..."
+            echo "${{ steps.changes.outputs.deleted_files }}" | while read -r file; do
+              if [ -n "$file" ]; then
+                echo "rm \"$file\"" >> ftp_script.txt
+                echo "  🗑️ Queued for deletion: $file"
+              fi
+            done
+          fi
 
+          echo "quit" >> ftp_script.txt
 
+          # Execute FTP commands
+          echo "🚀 Executing deployment..."
+          lftp -f ftp_script.txt
+
+          echo "✅ Selective deployment completed!"
+
+    - name: No Changes Detected
+      if: steps.deploy_mode.outputs.deployment_type == 'incremental' && steps.changes.outputs.has_changes == 'false'
+      run: |
+        echo "ℹ️ No deployable files changed since last commit."
+        echo "📁 Only documentation or configuration files were modified."
 
     - name: Full FTP Deploy
       if: steps.deploy_mode.outputs.deployment_type == 'full'
@@ -158,9 +212,12 @@ jobs:
         if [ "${{ steps.deploy_mode.outputs.deployment_type }}" = "full" ]; then
           echo "✅ Full deployment completed!"
           echo "🔄 Future pushes will only deploy changed files."
+        elif [ "${{ steps.changes.outputs.has_changes }}" = "true" ]; then
+          echo "✅ Selective deployment completed!"
+          echo "� Uploaded: $(echo '${{ steps.changes.outputs.changed_files }}' | wc -l) files"
+          echo "🗑️ Deleted: $(echo '${{ steps.changes.outputs.deleted_files }}' | wc -l) files"
+          echo "⚡ Only changed files were processed - no unnecessary transfers!"
         else
-          echo "✅ Smart incremental deployment completed!"
-          echo "📁 Only newer/changed files were uploaded."
-          echo "🗑️ Files removed from Git were deleted from server."
+          echo "ℹ️ No deployment needed - no relevant files changed."
         fi
-        echo "🎯 Server is now 100% synchronized with Git repository."
+        echo "🎯 Server synchronized with Git repository."
