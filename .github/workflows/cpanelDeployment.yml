@@ -13,6 +13,15 @@ on:
         options:
         - incremental
         - full
+        - force_all_php
+      force_upload:
+        description: 'Force upload all PHP files (if auto-detection fails)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+        - 'false'
+        - 'true'
 jobs:
   FTP-Deploy-Action:
     name: FTP-Deploy-Action
@@ -87,17 +96,35 @@ jobs:
       run: |
         echo "🔍 Detecting changed files from Git..."
 
-        # Get changed files (modified/added)
-        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(php|blade\.php|js|css|json|html|txt)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock|\.md$|README)' || true)
+        # Debug: Show recent commits
+        echo "Recent commits:"
+        git log --oneline -3
+        echo ""
+
+        # Get all changed files (more comprehensive)
+        echo "All changed files in last commit:"
+        git diff --name-only HEAD~1 HEAD
+        echo ""
+
+        # Get changed files (modified/added) - include more file types
+        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(php|blade\.php|js|css|json|html|txt|xml|yml|yaml)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock)$' || true)
 
         # Get deleted files
-        DELETED_FILES=$(git diff --name-status HEAD~1 HEAD | grep '^D' | cut -f2 | grep -E '\.(php|blade\.php|js|css|json|html|txt)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock|\.md$|README)' || true)
+        DELETED_FILES=$(git diff --name-status HEAD~1 HEAD | grep '^D' | cut -f2 | grep -E '\.(php|blade\.php|js|css|json|html|txt|xml|yml|yaml)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock)$' || true)
 
         echo "📝 Files to upload/update:"
-        echo "$CHANGED_FILES"
+        if [ -n "$CHANGED_FILES" ]; then
+          echo "$CHANGED_FILES"
+        else
+          echo "  (none)"
+        fi
         echo ""
         echo "🗑️ Files to delete:"
-        echo "$DELETED_FILES"
+        if [ -n "$DELETED_FILES" ]; then
+          echo "$DELETED_FILES"
+        else
+          echo "  (none)"
+        fi
 
         # Save to outputs
         echo "changed_files<<EOF" >> $GITHUB_OUTPUT
@@ -108,11 +135,27 @@ jobs:
         echo "$DELETED_FILES" >> $GITHUB_OUTPUT
         echo "EOF" >> $GITHUB_OUTPUT
 
+        # Force upload option
+        if [ "${{ github.event.inputs.force_upload }}" = "true" ]; then
+          echo "🔧 FORCE MODE: Uploading all PHP files regardless of Git changes"
+          CHANGED_FILES=$(find . -name "*.php" -o -name "*.blade.php" | grep -v -E '^(./tests/|./node_modules/|./.git/)' | sed 's|^\./||' || true)
+          echo "Force upload files:"
+          echo "$CHANGED_FILES"
+        fi
+
         # Check if there are any changes
         if [ -z "$CHANGED_FILES" ] && [ -z "$DELETED_FILES" ]; then
           echo "has_changes=false" >> $GITHUB_OUTPUT
+          echo "❌ No deployable changes detected"
+          echo ""
+          echo "🔧 If you expect changes but none detected, try:"
+          echo "   1. Manual deployment with 'full' mode"
+          echo "   2. Enable 'force_upload' option"
+          echo "   3. Check if file extensions are supported"
+          echo "   4. Verify files are committed to Git"
         else
           echo "has_changes=true" >> $GITHUB_OUTPUT
+          echo "✅ Changes detected - will deploy"
         fi
 
     - name: Selective FTP Deploy
@@ -142,19 +185,24 @@ jobs:
           echo "lcd ./" >> ftp_script.txt
 
           # Upload changed files
+          CHANGED_COUNT=0
           if [ -n "${{ steps.changes.outputs.changed_files }}" ]; then
             echo "📤 Uploading changed/new files..."
             echo "${{ steps.changes.outputs.changed_files }}" | while read -r file; do
               if [ -n "$file" ] && [ -f "$file" ]; then
                 # Create directory if needed
                 dir=$(dirname "$file")
-                if [ "$dir" != "." ]; then
+                if [ "$dir" != "." ] && [ "$dir" != "" ]; then
                   echo "mkdir -p \"$dir\"" >> ftp_script.txt
                 fi
                 echo "put \"$file\" \"$file\"" >> ftp_script.txt
                 echo "  ✅ Queued: $file"
+                CHANGED_COUNT=$((CHANGED_COUNT + 1))
               fi
             done
+            echo "Total files queued for upload: $CHANGED_COUNT"
+          else
+            echo "No files to upload"
           fi
 
           # Delete removed files
@@ -170,9 +218,19 @@ jobs:
 
           echo "quit" >> ftp_script.txt
 
-          # Execute FTP commands
+          # Show FTP script for debugging
+          echo "📋 FTP Script to execute:"
+          cat ftp_script.txt
+          echo ""
+
+          # Execute FTP commands with verbose output
           echo "🚀 Executing deployment..."
-          lftp -f ftp_script.txt
+          if lftp -f ftp_script.txt; then
+            echo "✅ FTP commands executed successfully!"
+          else
+            echo "❌ FTP execution failed!"
+            exit 1
+          fi
 
           echo "✅ Selective deployment completed!"
 
