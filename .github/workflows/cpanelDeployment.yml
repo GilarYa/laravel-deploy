@@ -56,22 +56,12 @@ jobs:
           # Install lftp
           sudo apt-get update && sudo apt-get install -y lftp
 
-          echo "🔍 Simple File Sync - Only sync changed files..."
-          echo "📋 Will upload newer/different files and delete removed files"
-          echo "⚡ Excluding only: vendor/ (already exists on server)"
-          echo "✅ Syncing all other files as-is"
+          echo "🔍 Laravel Core Sync - Only sync important Laravel folders..."
+          echo "📋 Will sync: app/, bootstrap/, config/, public/, resources/, routes/"
+          echo "⚡ Excluding: vendor/, .htaccess, index.php (server files)"
+          echo "✅ Safe deployment - only application code"
 
-          # Create minimal exclude file - only exclude vendor
-          cat > .lftp_exclude << 'EOF'
-          vendor/
-          vendor/*
-          .git/
-          .git/*
-          .github/
-          .github/*
-          EOF
-
-          # Use lftp mirror with intelligent comparison
+          # Use selective folder sync instead of full mirror
           lftp -e "
           set ftp:ssl-allow no;
           set ftp:passive-mode on;
@@ -82,20 +72,23 @@ jobs:
           cd /public_html/;
           lcd ./;
 
-          echo 'Starting simple file sync...';
-          echo 'Excluding only vendor/ folder, syncing everything else...';
+          echo 'Starting selective Laravel folder sync...';
 
-          # Simple mirror - sync all files except vendor
-          mirror --reverse --only-newer --delete --verbose --parallel=2 --exclude-glob-from=.lftp_exclude ./ ./;
+          # Sync only important Laravel folders
+          mirror --reverse --only-newer --verbose --parallel=2 app/ app/;
+          mirror --reverse --only-newer --verbose --parallel=2 bootstrap/ bootstrap/;
+          mirror --reverse --only-newer --verbose --parallel=2 config/ config/;
+          mirror --reverse --only-newer --verbose --parallel=2 resources/ resources/;
+          mirror --reverse --only-newer --verbose --parallel=2 routes/ routes/;
 
-          echo 'Sync completed!';
+          # Sync public folder but exclude index.php and .htaccess
+          mirror --reverse --only-newer --verbose --parallel=2 --exclude='index.php' --exclude='.htaccess' public/ public/;
+
+          echo 'Laravel core sync completed!';
           quit
           "
 
-          # Cleanup exclude file
-          rm -f .lftp_exclude
-
-          echo "✅ Smart server sync completed!"
+          echo "✅ Laravel core sync completed!"
 
 
 
@@ -110,19 +103,9 @@ jobs:
           # Install lftp
           sudo apt-get update && sudo apt-get install -y lftp
 
-          echo "🚀 Full file sync - uploading all files except vendor..."
+          echo "🚀 Full Laravel sync - uploading all Laravel core folders..."
 
-          # Create minimal exclude for full sync too
-          cat > .lftp_exclude << 'EOF'
-          vendor/
-          vendor/*
-          .git/
-          .git/*
-          .github/
-          .github/*
-          EOF
-
-          # Full sync with lftp
+          # Full Laravel folder sync
           lftp -e "
           set ftp:ssl-allow no;
           set ftp:passive-mode on;
@@ -131,13 +114,18 @@ jobs:
           open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }};
           cd /public_html/;
           lcd ./;
-          echo 'Starting full sync (excluding vendor)...';
-          mirror --reverse --delete --verbose --parallel=1 --exclude-glob-from=.lftp_exclude ./ ./;
+          echo 'Starting full Laravel folder sync...';
+
+          # Full sync of Laravel folders
+          mirror --reverse --delete --verbose --parallel=1 app/ app/;
+          mirror --reverse --delete --verbose --parallel=1 bootstrap/ bootstrap/;
+          mirror --reverse --delete --verbose --parallel=1 config/ config/;
+          mirror --reverse --delete --verbose --parallel=1 resources/ resources/;
+          mirror --reverse --delete --verbose --parallel=1 routes/ routes/;
+          mirror --reverse --delete --verbose --parallel=1 --exclude='index.php' --exclude='.htaccess' public/ public/;
+
           quit
           "
-
-          # Cleanup
-          rm -f .lftp_exclude
 
     - name: Deployment Summary
       if: always()
