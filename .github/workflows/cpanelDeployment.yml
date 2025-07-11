@@ -29,7 +29,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Full history for better diff detection
+        fetch-depth: 2  # Get last 2 commits for diff
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
@@ -90,155 +90,60 @@ jobs:
         echo "deployment_type=$DEPLOY_TYPE" >> $GITHUB_OUTPUT
         echo "🚀 Deployment mode: $DEPLOY_TYPE"
 
-    - name: Detect Changed Files
-      id: changes
+    - name: Smart Server Sync
+      id: sync_deploy
       if: steps.deploy_mode.outputs.deployment_type == 'incremental'
-      run: |
-        echo "🔍 Detecting changed files from Git..."
-
-        # Debug: Show recent commits
-        echo "Recent commits:"
-        git log --oneline -3
-        echo ""
-
-        # Get all changed files (more comprehensive)
-        echo "All changed files in last commit:"
-        git diff --name-only HEAD~1 HEAD
-        echo ""
-
-        # Get changed files (modified/added) - include more file types
-        CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep -E '\.(php|blade\.php|js|css|json|html|txt|xml|yml|yaml)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock)$' || true)
-
-        # Get deleted files
-        DELETED_FILES=$(git diff --name-status HEAD~1 HEAD | grep '^D' | cut -f2 | grep -E '\.(php|blade\.php|js|css|json|html|txt|xml|yml|yaml)$' | grep -v -E '^(tests/|\.github/|node_modules/|package.*\.json|composer\.lock)$' || true)
-
-        echo "📝 Files to upload/update:"
-        if [ -n "$CHANGED_FILES" ]; then
-          echo "$CHANGED_FILES"
-        else
-          echo "  (none)"
-        fi
-        echo ""
-        echo "🗑️ Files to delete:"
-        if [ -n "$DELETED_FILES" ]; then
-          echo "$DELETED_FILES"
-        else
-          echo "  (none)"
-        fi
-
-        # Save to outputs
-        echo "changed_files<<EOF" >> $GITHUB_OUTPUT
-        echo "$CHANGED_FILES" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-        echo "deleted_files<<EOF" >> $GITHUB_OUTPUT
-        echo "$DELETED_FILES" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-
-        # Force upload option
-        if [ "${{ github.event.inputs.force_upload }}" = "true" ]; then
-          echo "🔧 FORCE MODE: Uploading all PHP files regardless of Git changes"
-          CHANGED_FILES=$(find . -name "*.php" -o -name "*.blade.php" | grep -v -E '^(./tests/|./node_modules/|./.git/)' | sed 's|^\./||' || true)
-          echo "Force upload files:"
-          echo "$CHANGED_FILES"
-        fi
-
-        # Check if there are any changes
-        if [ -z "$CHANGED_FILES" ] && [ -z "$DELETED_FILES" ]; then
-          echo "has_changes=false" >> $GITHUB_OUTPUT
-          echo "❌ No deployable changes detected"
-          echo ""
-          echo "🔧 If you expect changes but none detected, try:"
-          echo "   1. Manual deployment with 'full' mode"
-          echo "   2. Enable 'force_upload' option"
-          echo "   3. Check if file extensions are supported"
-          echo "   4. Verify files are committed to Git"
-        else
-          echo "has_changes=true" >> $GITHUB_OUTPUT
-          echo "✅ Changes detected - will deploy"
-        fi
-
-    - name: Selective FTP Deploy
-      id: selective_deploy
-      if: steps.deploy_mode.outputs.deployment_type == 'incremental' && steps.changes.outputs.has_changes == 'true'
       uses: nick-fields/retry@v2
       with:
-        timeout_minutes: 8
+        timeout_minutes: 10
         max_attempts: 3
-        retry_wait_seconds: 15
+        retry_wait_seconds: 20
         command: |
           # Install lftp
           sudo apt-get update && sudo apt-get install -y lftp
 
-          echo "🎯 Selective deployment - only processing changed files..."
+          echo "🔍 Smart Server Sync - Checking server state vs local files..."
+          echo "📋 This will only upload files that are newer or different from server"
 
-          # Create FTP script
-          cat > ftp_script.txt << 'EOF'
-          set ftp:ssl-allow no
-          set ftp:passive-mode on
-          set net:timeout 60
-          set net:max-retries 3
-          EOF
+          # Use lftp mirror with intelligent comparison
+          lftp -e "
+          set ftp:ssl-allow no;
+          set ftp:passive-mode on;
+          set net:timeout 60;
+          set net:max-retries 3;
+          set net:reconnect-interval-base 5;
+          open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }};
+          cd /public_html/;
+          lcd ./;
 
-          echo "open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }}" >> ftp_script.txt
-          echo "cd /public_html/" >> ftp_script.txt
-          echo "lcd ./" >> ftp_script.txt
+          echo 'Starting intelligent sync...';
 
-          # Upload changed files
-          CHANGED_COUNT=0
-          if [ -n "${{ steps.changes.outputs.changed_files }}" ]; then
-            echo "📤 Uploading changed/new files..."
-            echo "${{ steps.changes.outputs.changed_files }}" | while read -r file; do
-              if [ -n "$file" ] && [ -f "$file" ]; then
-                # Create directory if needed
-                dir=$(dirname "$file")
-                if [ "$dir" != "." ] && [ "$dir" != "" ]; then
-                  echo "mkdir -p \"$dir\"" >> ftp_script.txt
-                fi
-                echo "put \"$file\" \"$file\"" >> ftp_script.txt
-                echo "  ✅ Queued: $file"
-                CHANGED_COUNT=$((CHANGED_COUNT + 1))
-              fi
-            done
-            echo "Total files queued for upload: $CHANGED_COUNT"
-          else
-            echo "No files to upload"
-          fi
+          # Mirror with smart comparison - upload newer/different, delete removed
+          mirror --reverse --only-newer --delete --verbose --parallel=2 \
+            --exclude-glob='.git*' \
+            --exclude-glob='node_modules*' \
+            --exclude-glob='tests*' \
+            --exclude-glob='*.md' \
+            --exclude-glob='package*.json' \
+            --exclude-glob='composer.lock' \
+            --exclude-glob='.env*' \
+            --exclude-glob='phpunit.xml' \
+            --exclude-glob='README*' \
+            --exclude-glob='.github*' \
+            --exclude-glob='storage/logs/*' \
+            --exclude-glob='storage/framework/cache/*' \
+            --exclude-glob='storage/framework/sessions/*' \
+            --exclude-glob='storage/framework/views/*' \
+            --exclude-glob='bootstrap/cache/*' \
+            ./ ./;
 
-          # Delete removed files
-          if [ -n "${{ steps.changes.outputs.deleted_files }}" ]; then
-            echo "🗑️ Deleting removed files..."
-            echo "${{ steps.changes.outputs.deleted_files }}" | while read -r file; do
-              if [ -n "$file" ]; then
-                echo "rm \"$file\"" >> ftp_script.txt
-                echo "  🗑️ Queued for deletion: $file"
-              fi
-            done
-          fi
+          echo 'Sync completed!';
+          quit
+          "
 
-          echo "quit" >> ftp_script.txt
+          echo "✅ Smart server sync completed!"
 
-          # Show FTP script for debugging
-          echo "📋 FTP Script to execute:"
-          cat ftp_script.txt
-          echo ""
 
-          # Execute FTP commands with verbose output
-          echo "🚀 Executing deployment..."
-          if lftp -f ftp_script.txt; then
-            echo "✅ FTP commands executed successfully!"
-          else
-            echo "❌ FTP execution failed!"
-            exit 1
-          fi
-
-          echo "✅ Selective deployment completed!"
-
-    - name: No Changes Detected
-      if: steps.deploy_mode.outputs.deployment_type == 'incremental' && steps.changes.outputs.has_changes == 'false'
-      run: |
-        echo "ℹ️ No deployable files changed since last commit."
-        echo "📁 Only documentation or configuration files were modified."
 
     - name: Full FTP Deploy
       if: steps.deploy_mode.outputs.deployment_type == 'full'
