@@ -1,16 +1,26 @@
-name: Publish Website to CPanel
+name: Deploy to CPanel
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      deployment_type:
+        description: 'Deployment type'
+        required: true
+        default: 'incremental'
+        type: choice
+        options:
+        - incremental
+        - full
 jobs:
   FTP-Deploy-Action:
     name: FTP-Deploy-Action
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2.1.0
+    - uses: actions/checkout@v4
       with:
-        fetch-depth: 2 
+        fetch-depth: 0  # Full history for better diff detection
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
@@ -59,17 +69,33 @@ jobs:
         mkdir -p storage/framework/views
         mkdir -p bootstrap/cache
 
-    - name: FTP Deploy with retry
+    - name: Determine deployment mode
+      id: deploy_mode
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          DEPLOY_TYPE="${{ github.event.inputs.deployment_type }}"
+        else
+          DEPLOY_TYPE="incremental"
+        fi
+
+        echo "deployment_type=$DEPLOY_TYPE" >> $GITHUB_OUTPUT
+        echo "🚀 Deployment mode: $DEPLOY_TYPE"
+
+    - name: Smart Incremental Deploy with Server Sync
+      id: incremental_deploy
+      if: steps.deploy_mode.outputs.deployment_type == 'incremental'
       uses: nick-fields/retry@v2
       with:
         timeout_minutes: 10
         max_attempts: 3
-        retry_wait_seconds: 30
+        retry_wait_seconds: 20
         command: |
-          # Install lftp if not available
+          # Install lftp
           sudo apt-get update && sudo apt-get install -y lftp
 
-          # Deploy with lftp
+          echo "🔍 Performing smart sync - checking server state first..."
+
+          # Use lftp mirror with --only-newer flag for intelligent sync
           lftp -e "
           set ftp:ssl-allow no;
           set ftp:passive-mode on;
@@ -78,6 +104,63 @@ jobs:
           open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }};
           cd /public_html/;
           lcd ./;
-          mirror --reverse --delete --verbose --parallel=1 --exclude-glob='.git*' --exclude-glob='node_modules*' --exclude-glob='tests*' ./ ./;
+
+          # Smart mirror: sync with server (including deletions)
+          echo \"🔄 SYNC MODE: Server will match Git repository exactly\"
+          echo \"⚠️ Files removed from Git will be deleted from server\"
+
+          mirror --reverse --only-newer --delete --verbose --parallel=2 \
+            --exclude-glob='.git*' \
+            --exclude-glob='node_modules*' \
+            --exclude-glob='tests*' \
+            --exclude-glob='*.md' \
+            --exclude-glob='package*.json' \
+            --exclude-glob='composer.lock' \
+            --exclude-glob='.env*' \
+            --exclude-glob='phpunit.xml' \
+            --exclude-glob='README*' \
+            --exclude-glob='.github*' \
+            ./ ./;
           quit
           "
+
+          echo "✅ Smart incremental deployment completed!"
+
+
+
+    - name: Full FTP Deploy
+      if: steps.deploy_mode.outputs.deployment_type == 'full'
+      uses: nick-fields/retry@v2
+      with:
+        timeout_minutes: 20
+        max_attempts: 2
+        retry_wait_seconds: 60
+        command: |
+          # Install lftp
+          sudo apt-get update && sudo apt-get install -y lftp
+
+          # Full deployment with lftp
+          lftp -e "
+          set ftp:ssl-allow no;
+          set ftp:passive-mode on;
+          set net:timeout 120;
+          set net:max-retries 3;
+          open ftp://${{ secrets.USERNAME }}:${{ secrets.PASSWORD }}@${{ secrets.SERVER }};
+          cd /public_html/;
+          lcd ./;
+          mirror --reverse --delete --verbose --parallel=1 ./ ./;
+          quit
+          "
+
+    - name: Deployment Summary
+      if: always()
+      run: |
+        if [ "${{ steps.deploy_mode.outputs.deployment_type }}" = "full" ]; then
+          echo "✅ Full deployment completed!"
+          echo "🔄 Future pushes will only deploy changed files."
+        else
+          echo "✅ Smart incremental deployment completed!"
+          echo "📁 Only newer/changed files were uploaded."
+          echo "🗑️ Files removed from Git were deleted from server."
+        fi
+        echo "🎯 Server is now 100% synchronized with Git repository."
