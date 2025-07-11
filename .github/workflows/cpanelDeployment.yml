@@ -104,6 +104,7 @@ jobs:
 
           echo "🔍 Smart Server Sync - Checking server state vs local files..."
           echo "📋 This will only upload files that are newer or different from server"
+          echo "⚡ Excluding vendor/ folder for faster deployment (already exists on server)"
 
           # Use lftp mirror with intelligent comparison
           lftp -e "
@@ -122,6 +123,7 @@ jobs:
           mirror --reverse --only-newer --delete --verbose --parallel=2 \
             --exclude-glob='.git*' \
             --exclude-glob='node_modules*' \
+            --exclude-glob='vendor*' \
             --exclude-glob='tests*' \
             --exclude-glob='*.md' \
             --exclude-glob='package*.json' \
@@ -135,6 +137,7 @@ jobs:
             --exclude-glob='storage/framework/sessions/*' \
             --exclude-glob='storage/framework/views/*' \
             --exclude-glob='bootstrap/cache/*' \
+            --exclude-glob='public/storage' \
             ./ ./;
 
           echo 'Sync completed!';
