@@ -61,18 +61,6 @@ jobs:
           echo "⚡ Excluding: vendor/, .htaccess, index.php (server files)"
           echo "✅ Safe deployment - only application code"
 
-          # Clear local bootstrap cache before deployment
-          echo "🧹 Clearing local bootstrap cache..."
-          echo "Files before clearing:"
-          ls -la bootstrap/cache/ || echo "bootstrap/cache directory not found"
-          echo "Counting PHP files to delete:"
-          find bootstrap/cache/ -name "*.php" -type f | wc -l || echo "0"
-          echo "Removing PHP cache files..."
-          rm -f bootstrap/cache/*.php
-          echo "Files after clearing:"
-          ls -la bootstrap/cache/ || echo "bootstrap/cache directory not found"
-          echo "✅ Local bootstrap cache cleared"
-
           # Use selective folder sync instead of full mirror
           lftp -e "
           set ftp:ssl-allow no;
@@ -93,28 +81,18 @@ jobs:
           mirror --reverse --only-newer --verbose --parallel=2 resources/ resources/;
           mirror --reverse --only-newer --verbose --parallel=2 routes/ routes/;
 
+          # Sync bootstrap/cache with delete to clear cache files
+          echo 'Syncing bootstrap/cache with delete to clear old cache...';
+          mirror --reverse --delete --verbose --parallel=1 bootstrap/cache/ bootstrap/cache/;
+
           # Sync public folder but exclude index.php and .htaccess
           mirror --reverse --only-newer --verbose --parallel=2 --exclude='index.php' --exclude='.htaccess' public/ public/;
-
-          echo 'Laravel core sync completed!';
-
-          # Clear server bootstrap cache after sync
-          echo 'Clearing server bootstrap cache...';
-          echo 'Files in bootstrap/cache before clearing:';
-          ls -la bootstrap/cache/ || echo 'bootstrap/cache directory not found';
-          echo 'Counting PHP files to delete:';
-          find bootstrap/cache/ -name \"*.php\" -type f | wc -l || echo '0';
-          echo 'Removing PHP cache files...';
-          rm -f bootstrap/cache/*.php;
-          echo 'Files in bootstrap/cache after clearing:';
-          ls -la bootstrap/cache/ || echo 'bootstrap/cache directory not found';
-          echo 'Server bootstrap cache cleared!';
 
           quit
           "
 
           echo "✅ Laravel core sync completed!"
-          echo "🧹 Bootstrap cache cleared on server"
+          echo "🧹 Bootstrap cache cleared - server cache matches local cache"
 
     - name: Deployment Summary
       if: always()
