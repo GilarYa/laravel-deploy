@@ -61,6 +61,11 @@ jobs:
           echo "⚡ Excluding: vendor/, .htaccess, index.php (server files)"
           echo "✅ Safe deployment - only application code"
 
+          # Clear local bootstrap cache before deployment
+          echo "🧹 Clearing local bootstrap cache..."
+          rm -f bootstrap/cache/*.php
+          echo "✅ Local bootstrap cache cleared"
+
           # Use selective folder sync instead of full mirror
           lftp -e "
           set ftp:ssl-allow no;
@@ -85,10 +90,17 @@ jobs:
           mirror --reverse --only-newer --verbose --parallel=2 --exclude='index.php' --exclude='.htaccess' public/ public/;
 
           echo 'Laravel core sync completed!';
+
+          # Clear server bootstrap cache after sync
+          echo 'Clearing server bootstrap cache...';
+          rm -f bootstrap/cache/*.php;
+          echo 'Server bootstrap cache cleared!';
+
           quit
           "
 
           echo "✅ Laravel core sync completed!"
+          echo "🧹 Bootstrap cache cleared on server"
 
 
 
@@ -104,6 +116,11 @@ jobs:
           sudo apt-get update && sudo apt-get install -y lftp
 
           echo "🚀 Full Laravel sync - uploading all Laravel core folders..."
+
+          # Clear local bootstrap cache before full deployment
+          echo "🧹 Clearing local bootstrap cache..."
+          rm -f bootstrap/cache/*.php
+          echo "✅ Local bootstrap cache cleared"
 
           # Full Laravel folder sync
           lftp -e "
@@ -123,6 +140,11 @@ jobs:
           mirror --reverse --delete --verbose --parallel=1 resources/ resources/;
           mirror --reverse --delete --verbose --parallel=1 routes/ routes/;
           mirror --reverse --delete --verbose --parallel=1 --exclude='index.php' --exclude='.htaccess' public/ public/;
+
+          # Clear server bootstrap cache after full sync
+          echo 'Clearing server bootstrap cache...';
+          rm -f bootstrap/cache/*.php;
+          echo 'Server bootstrap cache cleared!';
 
           quit
           "
