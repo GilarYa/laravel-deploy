@@ -85,6 +85,8 @@ jobs:
           echo 'Syncing bootstrap/cache with delete to clear old cache...';
           mirror --reverse --delete --verbose --parallel=1 bootstrap/cache/ bootstrap/cache/;
 
+          echo "✅ Laravel cleared old cache files completed!";
+
           # Sync public folder but exclude index.php and .htaccess
           mirror --reverse --only-newer --verbose --parallel=2 --exclude='index.php' --exclude='.htaccess' public/ public/;
 
